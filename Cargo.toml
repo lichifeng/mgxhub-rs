@@ -1,0 +1,9 @@
+[package]
+name = "mgxhub"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "*", features = ["multipart"] }
+mgx = "0.1.5"
+tokio = { version = "*", features = ["full"] }
