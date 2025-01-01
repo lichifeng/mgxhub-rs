@@ -1,20 +1,22 @@
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Multipart, State},
-    http::{StatusCode, HeaderMap, header},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Router,
 };
+use chrono::{DateTime, Utc};
 use clap::Parser;
-use elasticsearch::{Elasticsearch, IndexParts, http::transport::Transport};
+use elasticsearch::{http::transport::Transport, Elasticsearch, IndexParts};
 use flate2::{write::GzEncoder, Compression};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
-use std::path::PathBuf;
-use zip::{ZipWriter, write::FileOptions};
-use std::io::Write;
 use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+use zip::{write::FileOptions, ZipWriter};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -35,8 +37,12 @@ struct Config {
     #[arg(long, default_value = "records")]
     storage_dir: PathBuf,
 
+    // Maps storage directory
+    #[arg(long, default_value = "maps")]
+    maps_dir: PathBuf,
+
     /// SQLite database path
-    #[arg(long, default_value = "mgxhub.db")]
+    #[arg(long, default_value = "mgxhub.sqlite")]
     db_path: PathBuf,
 
     /// Elasticsearch URL
@@ -54,6 +60,7 @@ struct AppState {
     port: u16,
     host: String,
     storage_dir: PathBuf,
+    maps_dir: PathBuf,
     db_pool: SqlitePool,
     es_client: Elasticsearch,
     gzip: bool,
@@ -69,6 +76,7 @@ async fn main() {
 
     // Create storage directory if it doesn't exist
     std::fs::create_dir_all(&config.storage_dir).unwrap();
+    std::fs::create_dir_all(&config.maps_dir).unwrap();
 
     // Ensure database file exists
     if !config.db_path.exists() {
@@ -81,17 +89,20 @@ async fn main() {
     }
 
     // Initialize SQLite
-    let db_pool = SqlitePool::connect(&format!("sqlite:{}", config.db_path.display()))
-        .await
-        .unwrap();
-    
+    let db_pool = SqlitePool::connect(&format!("sqlite:{}", config.db_path.display())).await.unwrap();
+
     // Create table if not exists
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            md5 TEXT UNIQUE NOT NULL,
+            guid TEXT,
+            duration INTEGER,
+            haswinner BOOLEAN,
+            hasai BOOLEAN,
             data TEXT NOT NULL
-        )"
+        )",
     )
     .execute(&db_pool)
     .await
@@ -106,6 +117,7 @@ async fn main() {
         port: config.port,
         host: config.host.clone(),
         storage_dir: config.storage_dir,
+        maps_dir: config.maps_dir,
         db_pool,
         es_client,
         gzip: !config.no_gzip,
@@ -118,7 +130,7 @@ async fn main() {
 
     // 创建关闭信号通道
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    
+
     // 设置 ctrl-c 处理
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.unwrap();
@@ -129,8 +141,13 @@ async fn main() {
     let addr = format!("{}:{}", state.host, state.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("Mgxhub running on http://{}:{}", state.host, state.port);
-    println!("- Maximum upload size: {}MB", state.max_size);
-    println!("Press Ctrl+C to stop the server");
+    println!("├ Maximum upload size: {}MB", state.max_size);
+    println!("├   Storage directory: {}", state.storage_dir.canonicalize().unwrap().to_string_lossy());
+    println!("├      Maps directory: {}", state.maps_dir.canonicalize().unwrap().to_string_lossy());
+    println!("├     SQLite database: {}", config.db_path.canonicalize().unwrap().to_string_lossy());
+    println!("├   Elasticsearch URL: {}", config.es_url);
+    println!("└        GZIP enabled: {}", state.gzip);
+    println!("* Press Ctrl+C to stop the server");
 
     // 使用 axum::serve 的 with_graceful_shutdown
     axum::serve(listener, app)
@@ -170,7 +187,6 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
 
                 recname = Some(filename);
                 recfile = Some(data);
-                println!("Received file: {:?}", recname);
             }
             Some("lastmod") => match field.text().await.unwrap().parse::<u64>() {
                 Ok(time) => {
@@ -186,9 +202,16 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
 
     match (recfile, recname, lastmod) {
         (Some(data), Some(filename), Some(modified_time)) => {
-            // 这里可以处理 data
-            println!("Received file size: {} bytes", data.len());
-            println!("Last modified: {:?}", modified_time);
+            let now: DateTime<Utc> = Utc::now();
+            let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+            println!(
+                "[Info][{}] Uploaded: {}, size: {}, lastmod: {}",
+                formatted_time,
+                &filename,
+                data.len(),
+                modified_time
+            );
 
             let mut record = mgx::Record::new(filename.clone(), data.len(), modified_time);
             let mut parser = mgx::Parser::new(data.clone()).unwrap();
@@ -200,9 +223,18 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
             }
 
             let mut json_value = serde_json::to_value(&record).unwrap();
-            // if let Value::Object(ref mut map) = json_value {
-            //     !todo!();
-            // }
+            // Do some redaction
+            if let Value::Object(ref mut map) = json_value {
+                if let Some(ref raw_matchup) = record.matchup {
+                    if let Some(matchup) = map.get_mut("matchup") {
+                        let mut sorted_matchup = raw_matchup.clone();
+                        sorted_matchup.sort();
+                        *matchup = Value::String(
+                            sorted_matchup.iter().map(|n| n.to_string()).collect::<Vec<String>>().join("v"),
+                        );
+                    }
+                }
+            }
             let json = serde_json::to_string(&json_value).unwrap();
 
             let response = if state.gzip {
@@ -221,44 +253,109 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
                 // Return uncompressed JSON
                 let mut headers = HeaderMap::new();
                 headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-                
+
                 (StatusCode::OK, headers, json.clone()).into_response()
             };
 
             // Clone necessary values for async tasks
-            let storage_dir = state.storage_dir.clone();
             let db_pool = state.db_pool.clone();
             let es_client = state.es_client.clone();
             let filename_clone = filename.clone();
 
             // Spawn async tasks
             tokio::spawn(async move {
-                // 1. Create ZIP archive
-                let zip_path = storage_dir.join(format!("{}.zip", filename_clone));
-                let file = File::create(zip_path).unwrap();
+                // 1. Create ZIP archive and map file
+                let now: DateTime<Utc> = Utc::now();
+                let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+
+                match record.guid {
+                    Some(ref guid) => {
+                        if guid.is_empty() {
+                            ()
+                        }
+                        let map_path = state.maps_dir.clone().join(format!("{}.png", guid));
+                        if map_path.exists() {
+                            ()
+                        }
+                        match mgx::draw_map(&record, &parser, map_path.to_str().unwrap()) {
+                            Ok(_) => {
+                                #[cfg(debug_assertions)]
+                                println!("[Info][{}] Saved: {:?}", formatted_time, &map_path);
+                            }
+                            Err(e) => {
+                                eprintln!("[ Err][{}] Map: {}", formatted_time, e);
+                            }
+                        }
+                    }
+                    None => {}
+                }
+
+                let zip_path;
+                if let Some(ref md5) = record.md5 {
+                    if md5.is_empty() {
+                        return;
+                    }
+
+                    zip_path = state.storage_dir.clone().join(format!("{}.zip", md5));
+                    if zip_path.exists() {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+
+                let file = File::create(&zip_path).unwrap();
                 let mut zip = ZipWriter::new(file);
                 zip.start_file(filename_clone, FileOptions::<()>::default()).unwrap();
                 zip.write_all(&data).unwrap();
-                zip.finish().unwrap();
+
+                match zip.finish() {
+                    Ok(_) => {
+                        #[cfg(debug_assertions)]
+                        println!("[Info][{}] Saved: {:?}", formatted_time, &zip_path);
+                    }
+                    Err(e) => {
+                        eprintln!("[ Err][{}] ZIP: {}", formatted_time, e);
+                    }
+                }
             });
 
+            let json_value_arc = Arc::new(json_value);
+            let es_json = Arc::clone(&json_value_arc);
             tokio::spawn(async move {
                 // 2. Save to Elasticsearch
-                es_client
-                    .index(IndexParts::Index("records_demo"))
-                    .body(json_value)
-                    .send()
-                    .await
-                    .unwrap();
+                let now: DateTime<Utc> = Utc::now();
+                let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+                match es_client.index(IndexParts::Index("records_demo")).body(&es_json).send().await {
+                    Ok(retval) => {
+                        #[cfg(debug_assertions)]
+                        println!("[Info][{}] Elasticsearch: {:?}", formatted_time, retval.status_code());
+                    }
+                    Err(e) => {
+                        eprintln!("[Warn][{}] Elasticsearch: {}", formatted_time, e);
+                    }
+                }
             });
 
+            let sql_json = Arc::clone(&json_value_arc);
             tokio::spawn(async move {
                 // 3. Save to SQLite
-                sqlx::query("INSERT INTO records (data) VALUES (?)")
-                    .bind(json)
+                match sqlx::query("INSERT INTO records (md5, guid, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?)")
+                    .bind(&sql_json["md5"])
+                    .bind(&sql_json["guid"])
+                    .bind(&sql_json["haswinner"])
+                    .bind(&sql_json["hasai"])
+                    .bind(&json)
                     .execute(&db_pool)
                     .await
-                    .unwrap();
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        let now: DateTime<Utc> = Utc::now();
+                        let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+                        eprintln!("[Warn][{}] SQLite: {}", formatted_time, e);
+                    }
+                }
             });
 
             response
