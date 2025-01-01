@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "*", features = ["multipart"] }
-mgx = "0.1.5"
-tokio = { version = "*", features = ["full"] }
+axum = { version = "0.7", features = ["multipart"] }
+mgx = "0.1"
+tokio = { version = "1.42", features = ["full"] }
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1.0"
+elasticsearch = "8.17.0-alpha.1"
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "sqlite"] }
+tokio-util = "0.7"
+zip = "2.2"
+flate2 = "1.0"
