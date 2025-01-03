@@ -2,6 +2,8 @@
 name = "mgxhub"
 version = "0.1.0"
 edition = "2021"
+authors = ["daoyu<lichifeng@qq.com>"]
+description = "aocrec.com api server source code"
 
 [dependencies]
 axum = { version = "0.7", features = ["multipart"] }
@@ -15,3 +17,4 @@ tokio-util = "0.7"
 zip = "2.2"
 flate2 = "1.0"
 chrono = "0.4.39"
+tower-http = { version = "0.6.2", features = ["cors"] }

@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use clap::Parser;
 use elasticsearch::{http::transport::Transport, Elasticsearch, IndexParts};
 use flate2::{write::GzEncoder, Compression};
@@ -16,6 +16,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
 use zip::{write::FileOptions, ZipWriter};
 
 #[derive(Parser)]
@@ -35,19 +36,23 @@ struct Config {
 
     /// Records storage directory
     #[arg(long, default_value = "records")]
-    storage_dir: PathBuf,
+    record_dir: PathBuf,
 
-    // Maps storage directory
+    /// Maps storage directory
     #[arg(long, default_value = "maps")]
-    maps_dir: PathBuf,
+    map_dir: PathBuf,
 
     /// SQLite database path
     #[arg(long, default_value = "mgxhub.sqlite")]
     db_path: PathBuf,
 
     /// Elasticsearch URL
-    #[arg(long, default_value = "http://192.168.200.11:9200")]
+    #[arg(long, default_value = "http://192.168.200.11:9202")]
     es_url: String,
+
+    /// Elasticsearch index name
+    #[arg(long, default_value = "records_demo")]
+    es_index: String,
 
     /// Enable GZIP compression for JSON responses
     #[arg(long, default_value_t = false)]
@@ -59,10 +64,11 @@ struct AppState {
     max_size: usize,
     port: u16,
     host: String,
-    storage_dir: PathBuf,
-    maps_dir: PathBuf,
+    record_dir: PathBuf,
+    map_dir: PathBuf,
     db_pool: SqlitePool,
     es_client: Elasticsearch,
+    es_index: String,
     gzip: bool,
 }
 
@@ -70,13 +76,13 @@ struct AppState {
 async fn main() {
     let config = Config::parse();
     if config.max_size == 0 {
-        eprintln!("Error: max-size must be greater than 0");
+        eprintln!("[ Err] max-size must be greater than 0");
         std::process::exit(1);
     }
 
     // Create storage directory if it doesn't exist
-    std::fs::create_dir_all(&config.storage_dir).unwrap();
-    std::fs::create_dir_all(&config.maps_dir).unwrap();
+    std::fs::create_dir_all(&config.record_dir).unwrap();
+    std::fs::create_dir_all(&config.map_dir).unwrap();
 
     // Ensure database file exists
     if !config.db_path.exists() {
@@ -86,6 +92,8 @@ async fn main() {
         }
         // Create an empty database file
         File::create(&config.db_path).unwrap();
+
+        println!("[Info] DB file not exists, create: {}", config.db_path.display());
     }
 
     // Initialize SQLite
@@ -112,26 +120,68 @@ async fn main() {
     let transport = Transport::single_node(&config.es_url).unwrap();
     let es_client = Elasticsearch::new(transport);
 
+    // Check if index exists
+    match es_client
+        .indices()
+        .exists(elasticsearch::indices::IndicesExistsParts::Index(&[&config.es_index]))
+        .send()
+        .await
+    {
+        Ok(index_exists) => {
+            if !index_exists.status_code().is_success() {
+                // Read mapping from file
+                let mapping = include_str!("../es_mapping.json");
+                let mapping: serde_json::Value =
+                    serde_json::from_str(&mapping).expect("Failed to parse es_mapping.json");
+
+                match es_client
+                    .indices()
+                    .create(elasticsearch::indices::IndicesCreateParts::Index(&config.es_index))
+                    .body(mapping) // Use the mapping from file
+                    .send()
+                    .await
+                {
+                    Ok(_) => {
+                        println!("[Info] Created ES index: {} with mapping", config.es_index);
+                    }
+                    Err(e) => {
+                        eprintln!("[ Err] Failed to create ES index: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[ Err] Failed to check ES index: {}", e);
+            std::process::exit(1);
+        }
+    }
+
     let state = AppState {
         max_size: config.max_size,
         port: config.port,
-        host: config.host.clone(),
-        storage_dir: config.storage_dir,
-        maps_dir: config.maps_dir,
+        host: config.host,
+        record_dir: config.record_dir,
+        map_dir: config.map_dir,
         db_pool,
         es_client,
+        es_index: config.es_index,
         gzip: !config.no_gzip,
     };
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any) // Allow any origin
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST]) // Allow GET and POST methods
+        .allow_headers(Any); // Allow any headers
+
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .route("/", post(handle_upload).layer(DefaultBodyLimit::max(state.max_size * 1024 * 1024)))
-        .with_state(state.clone());
+        .route("/upload", post(handle_upload).layer(DefaultBodyLimit::max(state.max_size * 1024 * 1024)))
+        .with_state(state.clone())
+        .layer(cors);
 
-    // 创建关闭信号通道
+    // 处理 ctrl-c 信号
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-
-    // 设置 ctrl-c 处理
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.unwrap();
         println!("\nReceived Ctrl+C, shutting down mgxhub...");
@@ -140,10 +190,10 @@ async fn main() {
 
     let addr = format!("{}:{}", state.host, state.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    println!("Mgxhub running on http://{}:{}", state.host, state.port);
+    println!(" [{}] Mgxhub running on http://{}:{}", get_current_time(), state.host, state.port);
     println!("├ Maximum upload size: {}MB", state.max_size);
-    println!("├   Storage directory: {}", state.storage_dir.canonicalize().unwrap().to_string_lossy());
-    println!("├      Maps directory: {}", state.maps_dir.canonicalize().unwrap().to_string_lossy());
+    println!("├   Storage directory: {}", state.record_dir.canonicalize().unwrap().to_string_lossy());
+    println!("├      Maps directory: {}", state.map_dir.canonicalize().unwrap().to_string_lossy());
     println!("├     SQLite database: {}", config.db_path.canonicalize().unwrap().to_string_lossy());
     println!("├   Elasticsearch URL: {}", config.es_url);
     println!("└        GZIP enabled: {}", state.gzip);
@@ -157,7 +207,7 @@ async fn main() {
         .await
         .unwrap();
 
-    println!("Server shutdown completed");
+    println!("Mgxhub server has stopped.");
 }
 
 async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) -> impl IntoResponse {
@@ -190,7 +240,14 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
             }
             Some("lastmod") => match field.text().await.unwrap().parse::<u64>() {
                 Ok(time) => {
-                    lastmod = Some(time);
+                    // Validate time range (1999-01-01 to now)
+                    let current_time = chrono::Utc::now().timestamp() as u64;
+                    let min_time = 915148800; // 1999-01-01 00:00:00 UTC, age of empires 2 release date
+                    if time < min_time || time > current_time {
+                        lastmod = Some(current_time);
+                    } else {
+                        lastmod = Some(time);
+                    }
                 }
                 Err(_) => {
                     return (StatusCode::BAD_REQUEST, "Invalid last modified time").into_response();
@@ -202,12 +259,9 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
 
     match (recfile, recname, lastmod) {
         (Some(data), Some(filename), Some(modified_time)) => {
-            let now: DateTime<Utc> = Utc::now();
-            let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-
             println!(
                 "[Info][{}] Uploaded: {}, size: {}, lastmod: {}",
-                formatted_time,
+                get_current_time(),
                 &filename,
                 data.len(),
                 modified_time
@@ -216,14 +270,18 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
             let mut record = mgx::Record::new(filename.clone(), data.len(), modified_time);
             let mut parser = mgx::Parser::new(data.clone()).unwrap();
             match parser.parse_to(&mut record) {
-                Ok(_) => {}
+                Ok(_) => {
+                    record.convert_encoding();
+                    record.translate("zh");
+                }
                 Err(e) => {
                     return (StatusCode::INTERNAL_SERVER_ERROR, format!("Error parsing record: {}", e)).into_response();
                 }
             }
 
             let mut json_value = serde_json::to_value(&record).unwrap();
-            // Do some redaction
+
+            // Convert matchup array to string and other modifications
             if let Value::Object(ref mut map) = json_value {
                 if let Some(ref raw_matchup) = record.matchup {
                     if let Some(matchup) = map.get_mut("matchup") {
@@ -235,6 +293,8 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
                     }
                 }
             }
+            json_value["created_at"] = Value::String(get_current_time());
+
             let json = serde_json::to_string(&json_value).unwrap();
 
             let response = if state.gzip {
@@ -258,36 +318,35 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
             };
 
             // Clone necessary values for async tasks
-            let db_pool = state.db_pool.clone();
-            let es_client = state.es_client.clone();
             let filename_clone = filename.clone();
+            let json_value_arc = Arc::new(json_value);
 
             // Spawn async tasks
+            let storage_json = json_value_arc.clone();
             tokio::spawn(async move {
                 // 1. Create ZIP archive and map file
-                let now: DateTime<Utc> = Utc::now();
-                let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-
                 match record.guid {
                     Some(ref guid) => {
                         if guid.is_empty() {
                             ()
-                        }
-                        let map_path = state.maps_dir.clone().join(format!("{}.png", guid));
-                        if map_path.exists() {
-                            ()
-                        }
-                        match mgx::draw_map(&record, &parser, map_path.to_str().unwrap()) {
-                            Ok(_) => {
-                                #[cfg(debug_assertions)]
-                                println!("[Info][{}] Saved: {:?}", formatted_time, &map_path);
-                            }
-                            Err(e) => {
-                                eprintln!("[ Err][{}] Map: {}", formatted_time, e);
+                        } else {
+                            let map_path = state.map_dir.join(format!("{}.png", guid));
+                            if map_path.exists() {
+                                ()
+                            } else {
+                                match mgx::draw_map(&record, &parser, map_path.to_str().unwrap()) {
+                                    Ok(_) => {
+                                        #[cfg(debug_assertions)]
+                                        println!("[Info][{}] Map saved: {:?}", get_current_time(), &map_path);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[ Err][{}] Map: {}", get_current_time(), e);
+                                    }
+                                }
                             }
                         }
                     }
-                    None => {}
+                    None => (),
                 }
 
                 let zip_path;
@@ -296,7 +355,7 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
                         return;
                     }
 
-                    zip_path = state.storage_dir.clone().join(format!("{}.zip", md5));
+                    zip_path = state.record_dir.join(format!("{}.zip", md5));
                     if zip_path.exists() {
                         return;
                     }
@@ -306,38 +365,91 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
 
                 let file = File::create(&zip_path).unwrap();
                 let mut zip = ZipWriter::new(file);
-                zip.start_file(filename_clone, FileOptions::<()>::default()).unwrap();
+
+                // Convert Unix timestamp to DOS date/time
+                let dt =
+                    chrono::DateTime::from_timestamp(modified_time as i64, 0).unwrap_or_else(|| chrono::Utc::now());
+                let dos_time = zip::DateTime::from_date_and_time(
+                    dt.year() as u16,
+                    dt.month() as u8,
+                    dt.day() as u8,
+                    dt.hour() as u8,
+                    dt.minute() as u8,
+                    dt.second() as u8,
+                )
+                .unwrap_or_default();
+
+                let ver = storage_json["ver"].as_str().unwrap_or("unknown");
+                let matchup = storage_json["matchup"].as_str().unwrap_or("unknown");
+                let guid = storage_json["guid"].as_str().unwrap_or("00000");
+                let md5 = storage_json["md5"].as_str().unwrap_or("00000");
+                let recorder = storage_json["recorder"].as_i64().unwrap_or(0);
+
+                // Add a comment file with record info
+                let comment = format!(
+                    "\nAn Age of Empires II record file\n\nVersion: {}\nMatchup: {}\n\nG U I D: {}\nM  D  5: {}\n\nCollected by aocrec.com",
+                    ver, matchup, guid, md5
+                );
+                zip.set_comment(comment);
+
+                // Add record file with modified time
+                let options = FileOptions::<()>::default().last_modified_time(dos_time);
+                let filename = format!(
+                    "{}_{}_{}p_{}.{}",
+                    ver,
+                    matchup,
+                    recorder,
+                    &guid[..5],
+                    filename_clone.split('.').last().unwrap_or_default()
+                );
+                zip.start_file(filename, options).unwrap();
                 zip.write_all(&data).unwrap();
 
                 match zip.finish() {
                     Ok(_) => {
-                        #[cfg(debug_assertions)]
-                        println!("[Info][{}] Saved: {:?}", formatted_time, &zip_path);
+                        println!("[Info][{}] Zip saved: {:?}", get_current_time(), &zip_path);
                     }
                     Err(e) => {
-                        eprintln!("[ Err][{}] ZIP: {}", formatted_time, e);
+                        eprintln!("[ Err][{}] ZIP: {}", get_current_time(), e);
                     }
                 }
             });
 
-            let json_value_arc = Arc::new(json_value);
-            let es_json = Arc::clone(&json_value_arc);
+            let es_json = json_value_arc.clone();
             tokio::spawn(async move {
                 // 2. Save to Elasticsearch
-                let now: DateTime<Utc> = Utc::now();
-                let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-                match es_client.index(IndexParts::Index("records_demo")).body(&es_json).send().await {
+                match state
+                    .es_client
+                    .index(IndexParts::IndexId(&state.es_index, es_json["md5"].as_str().unwrap()))
+                    .body(&es_json)
+                    .send()
+                    .await
+                {
                     Ok(retval) => {
-                        #[cfg(debug_assertions)]
-                        println!("[Info][{}] Elasticsearch: {:?}", formatted_time, retval.status_code());
+                        if retval.status_code().is_success() {
+                            #[cfg(debug_assertions)]
+                            println!(
+                                "[Info][{}] ESDocMD5: {} status: {:?}",
+                                get_current_time(),
+                                es_json["md5"],
+                                retval.status_code()
+                            );
+                        } else {
+                            eprintln!(
+                                "[Warn][{}] ESDocMD5: {} status: {:?} ",
+                                get_current_time(),
+                                es_json["md5"],
+                                retval.status_code()
+                            );
+                        }
                     }
                     Err(e) => {
-                        eprintln!("[Warn][{}] Elasticsearch: {}", formatted_time, e);
+                        eprintln!("[Warn][{}] ESDocMD5: {} status: {}", get_current_time(), es_json["md5"], e);
                     }
                 }
             });
 
-            let sql_json = Arc::clone(&json_value_arc);
+            let sql_json = json_value_arc.clone();
             tokio::spawn(async move {
                 // 3. Save to SQLite
                 match sqlx::query("INSERT INTO records (md5, guid, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?)")
@@ -346,14 +458,12 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
                     .bind(&sql_json["haswinner"])
                     .bind(&sql_json["hasai"])
                     .bind(&json)
-                    .execute(&db_pool)
+                    .execute(&state.db_pool)
                     .await
                 {
                     Ok(_) => {}
                     Err(e) => {
-                        let now: DateTime<Utc> = Utc::now();
-                        let formatted_time = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-                        eprintln!("[Warn][{}] SQLite: {}", formatted_time, e);
+                        eprintln!("[Warn][{}] SQLite: {}", get_current_time(), e);
                     }
                 }
             });
@@ -362,4 +472,9 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
         }
         _ => (StatusCode::BAD_REQUEST, "Missing required fields").into_response(),
     }
+}
+
+fn get_current_time() -> String {
+    let now: DateTime<Utc> = Utc::now();
+    now.format("%Y-%m-%dT%H:%M:%S").to_string()
 }

@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <title>帝国时代档案库</title>
+    <script src="https://unpkg.com/petite-vue"></script>
+    <link rel="stylesheet" href="https://unpkg.com/98.css">
+    <style>
+        body {
+            max-width: 100%;
+            margin: 0 auto;
+            background: #c0c0c0;
+        }
+
+        .title-bar {
+            margin-bottom: 1rem;
+        }
+
+        .filter-group {
+            flex: 1 1 200px;
+        }
+
+        .search-container {
+            display: flex;
+            margin: 0 auto 2rem auto;
+            width: 80%;
+            max-width: 1000px;
+            gap: 1rem;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 400px;
+            padding: 0.5rem;
+        }
+
+        .filters {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: .5rem 1rem;
+            padding: 0 1rem;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: row;
+            gap: 1rem;
+        }
+
+        .filter-group h4 {
+            margin: 0;
+            font-size: inherit;
+            font-weight: bold;
+            min-width: 4em;
+            text-align: right;
+            padding-right: 0.5em;
+        }
+
+        .filter-options {
+            display: flex;
+            flex-wrap: wrap;
+            flex: 1;
+            gap: .3rem 1rem;
+        }
+
+        .filter-option label {
+            min-width: 2.5rem;
+        }
+
+        .expanded-group {
+            grid-column: 1 / -1;
+        }
+
+        .window-body {
+            padding: .3rem;
+        }
+
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .results-table th,
+        .results-table td {
+            padding: 0.2rem;
+            border: 1px solid #808080;
+        }
+
+        .highlight {
+            background-color: #ffff00;
+            border-radius: 2px;
+        }
+
+        .view-icon {
+            width: 16px;
+            height: 16px;
+            display: inline-block;
+            vertical-align: middle;
+            background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3C4.5 3 1.5 6 1.5 8s3 5 6.5 5 6.5-3 6.5-5-3-5-6.5-5zm0 8c-1.7 0-3-1.3-3-3s1.3-3 3-3 3 1.3 3 3-1.3 3-3 3z' fill='%23000'/%3E%3Ccircle cx='8' cy='8' r='1.5' fill='%23000'/%3E%3C/svg%3E") no-repeat center;
+        }
+
+        .pagination {
+            margin: 1rem 0 0;
+            text-align: right;
+        }
+
+        .upload-button {
+            color: purple;
+            font-weight: 600;
+        }
+
+        .announcement-link {
+            margin-left: 1rem;
+            line-height: 2;
+        }
+
+        .first-page-link {
+            margin: 0 1rem;
+        }
+
+        .copyright {
+            text-align: center;
+            color: #808080;
+            font-size: 0.9em;
+            margin: 1rem auto;
+        }
+
+        .results-table tbody tr:hover {
+            background-color: rgba(0, 0, 255, 0.1);
+        }
+
+        .results-table tbody tr:hover td {
+            border-top: 1px solid #1a75ff;
+            border-bottom: 1px solid #1a75ff;
+        }
+
+        .results-table tbody tr:hover td:first-child {
+            border-left: 1px solid #1a75ff;
+        }
+
+        .results-table tbody tr:hover td:last-child {
+            border-right: 1px solid #1a75ff;
+        }
+
+        .status-bar-field {
+            padding: 0.2rem;
+        }
+
+        .status-bar-field.search-status {
+            text-align: center;
+            color: #666;
+        }
+
+        .error {
+            color: red;
+        }
+
+        .buttons-container {
+            margin: 16px 0;
+        }
+
+        .buttons-container button {
+            margin-right: 8px;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .teammate {
+            display: inline-block;
+            padding: 0 .5rem .3rem 0;
+        }
+
+        .teammate:hover {
+            text-decoration: underline;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="window">
+        <div class="title-bar">
+            <div class="title-bar-text">帝国时代档案库</div>
+        </div>
+        <div id="app" v-scope>
+            <div class="window-body">
+                <div class="search-container">
+                    <input type="text" v-model="searchQuery" placeholder="搜索（请优先使用条件筛选）..." class="search-input"
+                        @input="handleSearchInput" @keyup.enter="doSearch">
+                    <button @click="resetSearch">重置</button>
+                    <button class="upload-button" @click="showUploadTab">上传存档</button>
+                    <a href="#" class="announcement-link">网站公告</a>
+                </div>
+                <fieldset>
+                    <legend>筛选条件</legend>
+                    <div class="filters" @vue:mounted="fetchFilters">
+                        <div class="filter-group">
+                            <h4>难度</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.difficulty" class="filter-option">
+                                    <input type="checkbox" :id="'difficulty-' + opt"
+                                        v-model="selectedFilters.difficulty" :value="opt" @change="doSearch">
+                                    <label :for="'difficulty-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <h4>分组</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.matchup" class="filter-option">
+                                    <input type="checkbox" :id="'matchup-' + opt" v-model="selectedFilters.matchup"
+                                        :value="opt" @change="doSearch">
+                                    <label :for="'matchup-' + opt">{{ opt }}</label>
+                                </div>
+                                <div class="filter-option">
+                                    <input type="checkbox" id="matchup-others" v-model="selectedFilters.matchup"
+                                        value="others" @change="doSearch">
+                                    <label for="matchup-others">其它</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <h4>速度</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.speed" class="filter-option">
+                                    <input type="checkbox" :id="'speed-' + opt" v-model="selectedFilters.speed"
+                                        :value="opt" @change="doSearch">
+                                    <label :for="'speed-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <h4>版本</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.ver" class="filter-option">
+                                    <input type="checkbox" :id="'ver-' + opt" v-model="selectedFilters.ver" :value="opt"
+                                        @change="doSearch">
+                                    <label :for="'ver-' + opt">{{ opt }}</label>
+                                </div>
+                                <div class="filter-option">
+                                    <input type="checkbox" id="ver-others" v-model="selectedFilters.ver" value="others"
+                                        @change="doSearch">
+                                    <label for="ver-others">其它</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <h4>胜利条件</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.victorytype" class="filter-option">
+                                    <input type="checkbox" :id="'victorytype-' + opt"
+                                        v-model="selectedFilters.victorytype" :value="opt" @change="doSearch">
+                                    <label :for="'victorytype-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <h4>地图可见</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.revealmap" class="filter-option">
+                                    <input type="checkbox" :id="'revealmap-' + opt" v-model="selectedFilters.revealmap"
+                                        :value="opt" @change="doSearch">
+                                    <label :for="'revealmap-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group expanded-group">
+                            <h4>地图尺寸</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.mapsize" class="filter-option">
+                                    <input type="checkbox" :id="'mapsize-' + opt" v-model="selectedFilters.mapsize"
+                                        :value="opt" @change="doSearch">
+                                    <label :for="'mapsize-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="filter-group expanded-group">
+                            <h4>游戏类型</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.gametype" class="filter-option">
+                                    <input type="checkbox" :id="'gametype-' + opt" v-model="selectedFilters.gametype"
+                                        :value="opt" @change="doSearch">
+                                    <label :for="'gametype-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 新增包含民族筛选 -->
+                        <div class="filter-group expanded-group">
+                            <h4>包含民族</h4>
+                            <div class="filter-options">
+                                <div v-for="opt in filters.civs" class="filter-option">
+                                    <input type="checkbox" :id="'civs-' + opt" v-model="selectedFilters.civs"
+                                        :value="opt" @change="doSearch">
+                                    <label :for="'civs-' + opt">{{ opt }}</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </fieldset>
+            </div>
+
+            <div class="window-body">
+                <menu role="tablist">
+                    <li role="tab" :aria-selected="activeTab === 'search'">
+                        <a href="#search" @click.prevent="activeTab = 'search'">查询结果</a>
+                    </li>
+                    <li role="tab" :aria-selected="activeTab === 'playerinfo'">
+                        <a href="#playerinfo" @click.prevent="activeTab = 'playerinfo'">玩家信息</a>
+                    </li>
+                    <li role="tab" :aria-selected="activeTab === 'upload'">
+                        <a href="#upload" @click.prevent="activeTab = 'upload'">上传进度</a>
+                    </li>
+                </menu>
+
+                <div class="window" role="tabpanel" v-show="activeTab === 'search'">
+                    <div class="window-body">
+                        <div class="sunken-panel">
+                            <table class="results-table" @vue:mounted="fetchRecords">
+                                <thead>
+                                    <tr>
+                                        <th>版本</th>
+                                        <th>地图大小</th>
+                                        <th>分组</th>
+                                        <th>速度</th>
+                                        <th>时长</th>
+                                        <th v-for="n in 8">玩家{{n}}</th>
+                                        <th>查看</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="record in records"
+                                        :title="formatDate(record.lastmod) + '\r\n' + record.instructions">
+                                        <td v-html="highlight(record.ver)"></td>
+                                        <td v-html="highlight(record.mapsize)"></td>
+                                        <td v-html="highlight(record.matchup)"></td>
+                                        <td v-html="highlight(record.speed)"></td>
+                                        <td>{{formatDuration(record.duration)}}</td>
+                                        <td v-for="n in 8"
+                                            :class="{'player-name-observer': !isMainPlayer(record.players, n)}"
+                                            v-html="formatPlayerName(record.players, n)"  @click="goToPlayerInfo">
+                                        </td>
+                                        <td>
+                                            <a :href="'#'" class="view-icon" :title="'查看录像详情'" target="_blank"></a>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="pagination">
+                            <button class="first-page-link" @click="goToFirstPage" :disabled="currentPage === 1">
+                                回到首页
+                            </button>
+                            <button @click="prevPage" :disabled="currentPage === 1">上一页</button>
+                            <select v-model="pageSize" @change="handlePageSizeChange"
+                                style="margin: auto .5rem auto 1rem;">
+                                <option value="20">20条/页</option>
+                                <option value="50">50条/页</option>
+                                <option value="100">100条/页</option>
+                            </select>
+                            <span style="margin: auto 1rem auto .5rem;">第 {{currentPage}}/{{totalPages()}} 页</span>
+                            <button @click="nextPage" :disabled="!hasMorePages()">下一页</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="window" role="tabpanel" v-show="activeTab === 'playerinfo'">
+                    <div class="window-body">
+                        <div class="search-player-container" style="margin-bottom: 1rem;">
+                            <div style="display: flex; gap: 1rem; margin-bottom: .5rem;">
+                                <input type="text" v-model="playerSearchQuery" placeholder="请输入要查询的玩家ID"
+                                    style="flex: 1;">
+                                <button @click="searchPlayer">开始查询</button>
+                            </div>
+                            <div style="margin-bottom: 1rem;"><strong style="color: purple">✨
+                                    为防误点，请手动点击查询按钮加载数据</strong></div>
+                            <div v-if="playerStats"
+                                style="display: grid; grid-template-columns: repeat(5, minmax(100px, 1fr)); gap: .5rem;">
+                                <div><strong>玩家 ID：</strong>{{playerStats.queryName}}</div>
+                                <div><strong>游戏总数：</strong>{{playerStats.totalGames}}</div>
+                                <div><strong>已知结果：</strong>{{playerStats.gamesWithResult}}</div>
+                                <div><strong>获胜数量：</strong>{{playerStats.wonGames}}</div>
+                                <div><strong>估算胜率：</strong>{{playerStats.winRate}}%</div>
+                                <div style="grid-column: 1/-1">
+                                    <strong>关联玩家：</strong>
+                                    <span v-for="(teammate, index) in playerStats.commonTeammates" :key="index"
+                                        class="teammate" @click="playerSearchQuery=teammate.name">
+                                        {{ teammate.name }} ({{ teammate.count }}次)
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="sunken-panel">
+                            <table class="results-table">
+                                <thead>
+                                    <tr>
+                                        <th>版本</th>
+                                        <th>地图大小</th>
+                                        <th>分组</th>
+                                        <th>速度</th>
+                                        <th>时长</th>
+                                        <th v-for="n in 8">玩家{{n}}</th>
+                                        <th>查看</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="record in playerrecords"
+                                        :title="formatDate(record.lastmod) + '\r\n' + record.instructions">
+                                        <td v-html="highlight(record.ver)"></td>
+                                        <td v-html="highlight(record.mapsize)"></td>
+                                        <td v-html="highlight(record.matchup)"></td>
+                                        <td v-html="highlight(record.speed)"></td>
+                                        <td>{{formatDuration(record.duration)}}</td>
+                                        <td v-for="n in 8"
+                                            :class="{'player-name-observer': !isMainPlayer(record.players, n)}"
+                                            v-html="formatPlayerName(record.players, n)" @click="goToPlayerInfo">
+                                        </td>
+                                        <td>
+                                            <a :href="'#'" class="view-icon" :title="'查看录像详情'" target="_blank"></a>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="pagination">
+                            <button class="first-page-link" @click="goToFirstPage('playerinfo')"
+                                :disabled="pcurrentPage === 1">
+                                回到首页
+                            </button>
+                            <button @click="prevPage('playerinfo')" :disabled="pcurrentPage === 1">上一页</button>
+                            <select v-model="ppageSize" @change="handlePageSizeChange('playerinfo')"
+                                style="margin: auto .5rem auto 1rem;">
+                                <option value="20">20条/页</option>
+                                <option value="50">50条/页</option>
+                                <option value="100">100条/页</option>
+                            </select>
+                            <span style="margin: auto 1rem auto .5rem;">第 {{pcurrentPage}}/{{totalPages('playerinfo')}}
+                                页</span>
+                            <button @click="nextPage('playerinfo')" :disabled="!hasMorePages('playerinfo')">下一页</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="window" role="tabpanel" v-show="activeTab === 'upload'">
+                    <div class="window-body">
+                        <div class="buttons-container">
+                            <button onclick="document.getElementById('fileInput').click()"
+                                class="upload-button">选取文件</button>
+                            <button @click="clearCompleted">清空已完成</button>
+                            <input type="file" id="fileInput" multiple @change="handleFileSelect">
+                        </div>
+                        <div class="sunken-panel">
+                            <table class="results-table">
+                                <thead>
+                                    <tr>
+                                        <th>文件名</th>
+                                        <th>文件大小</th>
+                                        <th>最后修改日期</th>
+                                        <th>上传进度</th>
+                                        <th>上传结果</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="file in uploadFiles">
+                                        <td>{{ file.name }}</td>
+                                        <td>{{ formatSize(file.size) }}</td>
+                                        <td>{{ formatDate(file.lastModified) }}</td>
+                                        <td class="progress-cell">
+                                            <span v-if="file.error" class="error">错误</span>
+                                            <template v-else>{{ file.progress.toFixed(1) }}%</template>
+                                        </td>
+                                        <td v-html="file.status"></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-bar" @vue:mounted="fetchStats">
+                <div class="status-bar-field">总游戏数量: {{stats.totalGames}}</div>
+                <div class="status-bar-field">总玩家数量: {{stats.totalPlayers}}</div>
+                <div class="status-bar-field">本月新增游戏: {{stats.recentUploads}}</div>
+                <div class="status-bar-field search-status" :class="{ error: searchStatus === 'error' }">
+                    {{searchStatusText}}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="copyright">
+        2017-2024 帝国时代档案库
+    </div>
+    <script>
+        let es_url = 'http://192.168.200.11:9202/records_demo/_search';
+
+        PetiteVue.createApp({
+            searchQuery: '',
+            currentPage: 1,
+            pageSize: 20,
+            records: [],
+            totalHits: 0,
+            filters: {
+                difficulty: [],
+                mapsize: [],
+                speed: [],
+                ver: [],
+                matchup: [],
+                gametype: [],
+                victorytype: [],
+                revealmap: [],
+                civs: [],
+            },
+            selectedFilters: {
+                difficulty: [],
+                mapsize: [],
+                matchup: [],
+                speed: [],
+                ver: [],
+                gametype: [],
+                victorytype: [],
+                revealmap: [],
+                civs: [],
+            },
+            stats: {
+                totalGames: 0,
+                totalPlayers: 0
+            },
+            searchTimeout: null,
+            activeTab: 'search',
+            searchStatus: 'idle',
+            hasMorePages(panel) {
+                if (panel === 'playerinfo') {
+                    return this.ptotalHits > this.pcurrentPage * this.ppageSize;
+                }
+                return this.totalHits > this.currentPage * this.pageSize;
+            },
+            totalPages(panel) {
+                if (panel === 'playerinfo') {
+                    return Math.ceil(this.ptotalHits / this.ppageSize);
+                }
+                return Math.ceil(this.totalHits / this.pageSize);
+            },
+            // 添加基础请求配置
+            getBaseRequestConfig() {
+                return {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    credentials: 'include'
+                };
+            },
+            // 添加通用的响应检查方法
+            async checkResponse(response, errorMessage) {
+                if (!response.ok) {
+                    throw new Error(`${errorMessage}: ${response.status}`);
+                }
+                return await response.json();
+            },
+            async fetchFilters() {
+                try {
+                    const response = await fetch(es_url, {
+                        ...this.getBaseRequestConfig(),
+                        body: JSON.stringify({
+                            size: 0,
+                            aggs: {
+                                difficulties: { terms: { field: 'difficulty' } },
+                                mapsizes: { terms: { field: 'mapsize' } },
+                                speeds: { terms: { field: 'speed' } },
+                                versions: {
+                                    terms: {
+                                        field: 'ver',
+                                        size: 3
+                                    }
+                                },
+                                matchups: {
+                                    terms: {
+                                        field: 'matchup',
+                                        size: 4
+                                    }
+                                },
+                                gametypes: { terms: { field: 'gametype' } },
+                                victorytypes: { terms: { field: 'victorytype' } },
+                                revealmaps: { terms: { field: 'revealmap' } },
+                                civs: {
+                                    nested: { path: "players" },
+                                    aggs: {
+                                        unique_civs: {
+                                            terms: {
+                                                field: "players.civ",
+                                                size: 50
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    });
+                    const data = await this.checkResponse(response, 'Failed to fetch filters');
+
+                    this.filters.difficulty = data.aggregations.difficulties.buckets.map(b => b.key);
+                    this.filters.mapsize = data.aggregations.mapsizes.buckets.map(b => b.key);
+                    this.filters.speed = data.aggregations.speeds.buckets.map(b => b.key);
+                    this.filters.ver = data.aggregations.versions.buckets.map(b => b.key);
+                    this.filters.matchup = data.aggregations.matchups.buckets.map(b => b.key);
+                    this.filters.gametype = data.aggregations.gametypes.buckets.map(b => b.key);
+                    this.filters.victorytype = data.aggregations.victorytypes.buckets.map(b => b.key);
+                    this.filters.revealmap = data.aggregations.revealmaps.buckets.map(b => b.key);
+                    this.filters.civs = data.aggregations.civs.unique_civs.buckets.map(b => b.key);
+                } catch (error) {
+                    console.error('Failed to fetch filters:', error);
+                }
+            },
+            async fetchStats() {
+                try {
+                    // 获取当前日期和当前月份的开始和结束时间（UTC+8 时区）
+                    const now = new Date();
+                    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
+                    const endOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59));
+                    startOfMonth.setUTCHours(startOfMonth.getUTCHours() + 8);
+                    endOfMonth.setUTCHours(endOfMonth.getUTCHours() + 8);
+
+                    const response = await fetch(es_url, {
+                        ...this.getBaseRequestConfig(),
+                        body: JSON.stringify({
+                            size: 0,
+                            aggs: {
+                                total_games: { cardinality: { field: 'guid' } },
+                                total_players: {
+                                    nested: { path: 'players' },
+                                    aggs: {
+                                        unique_players: { cardinality: { field: 'players.name.keyword' } }
+                                    }
+                                },
+                                recent_uploads: {
+                                    filter: {
+                                        range: {
+                                            created_at: {
+                                                gte: startOfMonth.toISOString(),
+                                                lte: endOfMonth.toISOString()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    });
+                    const data = await this.checkResponse(response, 'Failed to fetch stats');
+                    this.stats.totalGames = data.aggregations.total_games.value;
+                    this.stats.totalPlayers = data.aggregations.total_players.unique_players.value;
+                    this.stats.recentUploads = data.aggregations.recent_uploads.doc_count;
+                } catch (error) {
+                    console.error('Failed to fetch stats:', error);
+                }
+            },
+            async fetchRecords() {
+                this.searchStatus = 'loading';
+                try {
+                    const query = this.buildQuery();
+                    const response = await fetch(es_url, {
+                        ...this.getBaseRequestConfig(),
+                        body: JSON.stringify({
+                            from: (this.currentPage - 1) * this.pageSize,
+                            size: this.pageSize,
+                            query: query,
+                            sort: [
+                                { "_score": "desc" },
+                                { "lastmod": "desc" },
+                                { "duration": "desc" }
+                            ],
+                            collapse: { field: "guid" }
+                        })
+                    });
+                    const data = await this.checkResponse(response, 'Failed to fetch records');
+                    this.records = data.hits.hits.map(hit => hit._source);
+                    this.totalHits = data.hits.total.value;
+                    this.searchStatus = 'idle';
+                } catch (error) {
+                    console.error('Failed to fetch records:', error);
+                    this.searchStatus = 'error';
+                }
+            },
+            buildQuery() {
+                const must = [];
+                if (this.searchQuery) {
+                    const keywords = this.searchQuery.split(/\s+/).filter(k => k.length > 0);
+
+                    keywords.forEach(keyword => {
+                        must.push({
+                            bool: {
+                                should: [
+                                    {
+                                        multi_match: {
+                                            query: keyword,
+                                            fields: [
+                                                "speed^10",
+                                                "ver^10",
+                                                "guid^10",
+                                                "md5^10",
+                                                "matchup^10",
+                                                "filename.keyword^5",
+                                                "difficulty^3",
+                                                "mapsize^3",
+                                                "revealmap^3",
+                                                "victorytype^3",
+                                                "gametype^3",
+                                                "mapname.keyword^3",
+                                                "instructions^2",
+                                                "mapname",
+                                                "filename",
+                                                "chat.content"
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        nested: {
+                                            path: "players",
+                                            query: {
+                                                bool: {
+                                                    should: [
+                                                        {
+                                                            match: {
+                                                                "players.name": {
+                                                                    query: keyword
+                                                                }
+                                                            }
+                                                        },
+                                                        {
+                                                            term: {
+                                                                "players.name.keyword": {
+                                                                    value: keyword,
+                                                                    boost: 5,
+                                                                    case_insensitive: true
+                                                                }
+                                                            }
+                                                        },
+                                                        {
+                                                            term: {
+                                                                "players.civ": {
+                                                                    value: keyword,
+                                                                    boost: 5
+                                                                }
+                                                            }
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        });
+                    });
+                }
+
+                Object.entries(this.selectedFilters).forEach(([field, values]) => {
+                    if (values.length) {
+                        if (['ver', 'matchup'].includes(field)) {
+                            const should = [];
+                            values.forEach(v => {
+                                if (v === 'others') {
+                                    should.push({
+                                        bool: {
+                                            must_not: {
+                                                terms: {
+                                                    [field]: this.filters[field]
+                                                }
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    should.push({
+                                        term: {
+                                            [field]: v
+                                        }
+                                    });
+                                }
+                            });
+                            must.push({ bool: { should } });
+                        } else if (field === 'civs') {
+                            const civsMust = values.map(civ => ({
+                                nested: {
+                                    path: "players",
+                                    query: {
+                                        term: {
+                                            "players.civ": civ
+                                        }
+                                    }
+                                }
+                            }));
+                            must.push({ bool: { must: civsMust } });
+                        } else {
+                            must.push({
+                                terms: {
+                                    [field]: values
+                                }
+                            });
+                        }
+                    }
+                });
+                return must.length ? { bool: { must } } : { match_all: {} };
+            },
+            isMainPlayer(players, index) {
+                return players[index]?.ismainop ?? true;
+            },
+            formatDuration(milliseconds) {
+                if (!milliseconds) return null;
+                const totalSeconds = Math.floor(milliseconds / 1000);
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+
+                const pad = (num) => String(num).padStart(2, '0');
+                return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+            },
+            handleSearchInput() {
+                // Debounce search
+                if (this.searchTimeout) {
+                    clearTimeout(this.searchTimeout);
+                }
+                this.searchTimeout = setTimeout(() => {
+                    this.doSearch();
+                }, 300); // Reduced debounce time for better responsiveness
+            },
+            doSearch() {
+                this.currentPage = 1;
+                this.fetchRecords();
+            },
+            resetSearch() {
+                this.searchQuery = '';
+                this.selectedFilters = {
+                    difficulty: [],
+                    mapsize: [],
+                    matchup: [],
+                    speed: [],
+                    ver: [],
+                    gametype: [],
+                    victorytype: [],
+                    revealmap: [],
+                    civs: [],
+                };
+                this.currentPage = 1;
+                this.doSearch();
+                this.activeTab = 'search';
+            },
+            prevPage(panel) {
+                if (panel === 'playerinfo') {
+                    if (this.pcurrentPage > 1) {
+                        this.pcurrentPage--;
+                        this.fetchPlayerRecords();
+                    }
+                } else {
+                    if (this.currentPage > 1) {
+                        this.currentPage--;
+                        this.fetchRecords();
+                    }
+                }
+            },
+            nextPage(panel) {
+                if (panel === 'playerinfo') {
+                    if (this.hasMorePages(panel)) {
+                        this.pcurrentPage++;
+                        this.fetchPlayerRecords();
+                    }
+                } else {
+                    if (this.hasMorePages()) {
+                        this.currentPage++;
+                        this.fetchRecords();
+                    }
+                }
+            },
+            handlePageSizeChange(panel) {
+                if (panel === 'playerinfo') {
+                    this.pcurrentPage = 1;
+                    this.fetchPlayerRecords();
+                } else {
+                    this.currentPage = 1;
+                    this.fetchRecords();
+                }
+            },
+            highlight(text) {
+                if (!text || (!this.searchQuery && !this.playerSearchQuery)) return text;
+
+                // 修复转义特殊字符的代码
+                const escapeHtml = (str) => {
+                    const el = document.createElement('div');
+                    el.textContent = str;
+                    return el.innerHTML;
+                };
+
+                // 处理搜索词
+                const keywords = (this.activeTab === 'playerinfo') ? [this.playerSearchQuery.trim()] : this.searchQuery.split(/\s+/).filter(k => k.length > 0);
+                if (keywords.length === 0) return escapeHtml(text);
+
+                let result = escapeHtml(text);
+
+                keywords.forEach(keyword => {
+                    if (!keyword) return;
+                    const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const regex = new RegExp(escapedKeyword, 'gi');
+                    result = result.replace(regex, match =>
+                        `<span class="highlight">${match}</span>`
+                    );
+                });
+
+                return result;
+            },
+            formatPlayerName(players, index) {
+                if (!players || players[index]['playertype'] < 1 || !players[index]['name'] || !players[index]['civ']) return '';
+                const name = players[index].name;
+                const colorid = players[index].colorid;
+                const colors = {
+                    0: '#027EE8',
+                    1: '#ff0000',
+                    2: '#008000',
+                    3: '#d1b600',
+                    4: '#0dcaf0',
+                    5: '#ff00ff',
+                    6: '#999999',
+                    7: '#ff8201',
+                    8: '#000000',
+                    9: '#000000',
+                    10: '#000000',
+                    11: '#0000ff',
+                    12: '#ffff00',
+                    13: '#ffffff',
+                    14: '#ff0000'
+                };
+                const color = colors[colorid] || '#000000';
+                const highlightedName = this.highlight(name);
+                const teamid = players[index].teamid > 1 ? players[index].teamid : '-';
+                const civ = players[index].civ;
+                const title = `${name}\n` + `封建时代: ${this.formatDuration(players[index].feudaltime) ?? '/'}\n` +
+                    `城堡时代: ${this.formatDuration(players[index].castletime) ?? '/'}\n` +
+                    `帝王时代: ${this.formatDuration(players[index].imperialtime) ?? '/'}\n` +
+                    `投降时间: ${this.formatDuration(players[index].resigned) ?? '/'}`;
+                return `[${teamid} ${this.highlight(civ)}] <a href="#" class="player-link" style="color: ${color}" @click.prevent="handlePlayerClick('${name}')" title="${title}">${highlightedName}</a>`;
+            },
+            showUploadTab() {
+                this.activeTab = 'upload';
+            },
+            goToFirstPage(panel) {
+                if (panel === 'playerinfo') {
+                    if (this.pcurrentPage !== 1) {
+                        this.pcurrentPage = 1;
+                        this.fetchPlayerRecords();
+                    }
+                } else {
+                    if (this.currentPage !== 1) {
+                        this.currentPage = 1;
+                        this.fetchRecords();
+                    }
+                }
+            },
+            get searchStatusText() {
+                const statusMap = {
+                    'idle': '加载完成',
+                    'loading': '正在查询...',
+                    'error': '查询出错，请刷新页面'
+                };
+                return statusMap[this.searchStatus] || '加载完成';
+            },
+            // 添加上传相关的状态
+            uploadConfig: {
+                maxSimultaneous: 3,
+                allowedExtensions: ['.mgx', '.mgz', '.mgx2', '.mgl'],
+                maxFileSize: 30 * 1024 * 1024,
+                uploadUrl: 'http://127.0.0.1:3000/upload'
+            },
+            uploadQueue: [],
+            uploadFiles: [],
+            currentUploads: 0,
+
+            // 添加上传相关的方法
+            formatSize(bytes) {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+            },
+
+            formatDate(date) {
+                return new Date(date).toLocaleString();
+            },
+
+            checkFile(file) {
+                const ext = '.' + file.name.split('.').pop().toLowerCase();
+                if (!this.uploadConfig.allowedExtensions.includes(ext)) {
+                    return `不支持的文件类型: ${ext}`;
+                }
+                if (file.size > this.uploadConfig.maxFileSize) {
+                    return `文件大小超过限制: ${this.formatSize(file.size)} > ${this.formatSize(this.uploadConfig.maxFileSize)}`;
+                }
+                return null;
+            },
+
+            handleFileSelect(event) {
+                const files = Array.from(event.target.files);
+                files.forEach(file => {
+                    // 检查文件是否已存在
+                    const existingFile = this.uploadFiles.find(f =>
+                        f.name === file.name &&
+                        f.size === file.size &&
+                        f.lastModified === file.lastModified
+                    );
+
+                    if (existingFile) {
+                        // 如果文件已完成上传或正在上传，跳过
+                        if (existingFile.progress === 100 || existingFile.progress > 0) {
+                            return;
+                        }
+                        // 如果文件存在但未上传，重置其状态
+                        existingFile.progress = 0;
+                        existingFile.status = '等待上传...';
+                        existingFile.error = null;
+                        // 确保文件重新进入上传队列
+                        if (!this.uploadQueue.includes(file)) {
+                            this.uploadQueue.push(file);
+                        }
+                    } else {
+                        // 处理新文件
+                        const error = this.checkFile(file);
+                        const fileInfo = {
+                            name: file.name,
+                            size: file.size,
+                            lastModified: file.lastModified,
+                            progress: error ? -1 : 0,
+                            status: error ? error : '等待上传...',
+                            error: error
+                        };
+
+                        this.uploadFiles.push(fileInfo);
+
+                        if (!error) {
+                            this.uploadQueue.push(file);
+                        }
+                    }
+                });
+                event.target.value = '';
+                this.processQueue();
+            },
+
+            processQueue() {
+                while (this.currentUploads < this.uploadConfig.maxSimultaneous && this.uploadQueue.length > 0) {
+                    const file = this.uploadQueue.shift();
+                    this.uploadFile(file);
+                }
+            },
+
+            updateProgress(fileName, progress) {
+                const file = this.uploadFiles.find(f => f.name === fileName);
+                if (file) {
+                    file.progress = progress;
+                }
+            },
+
+            updateResult(fileName, result) {
+                const file = this.uploadFiles.find(f => f.name === fileName);
+                if (file) {
+                    if (result.guid) {
+                        file.status = `<a href="/download/${result.guid}" target="_blank">下载链接</a>`;
+                    } else {
+                        file.status = `<span class="error">${result.error || '上传失败'}</span>`;
+                    }
+                }
+            },
+
+            uploadFile(file) {
+                this.currentUploads++;
+                const formData = new FormData();
+                formData.append('recfile', file);
+                formData.append('lastmod', file.lastModified);
+
+                const xhr = new XMLHttpRequest();
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const progress = (e.loaded / e.total) * 100;
+                        this.updateProgress(file.name, progress);
+                    }
+                });
+
+                xhr.onload = () => {
+                    this.currentUploads--;
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        this.updateResult(file.name, response);
+                    } catch (e) {
+                        this.updateResult(file.name, { error: '解析响应失败' });
+                    }
+                    this.processQueue();
+                };
+
+                xhr.onerror = () => {
+                    this.currentUploads--;
+                    this.updateResult(file.name, { error: '网络错误' });
+                    this.processQueue();
+                };
+
+                xhr.open('POST', this.uploadConfig.uploadUrl, true);
+                xhr.send(formData);
+            },
+
+            clearCompleted() {
+                this.uploadFiles = this.uploadFiles.filter(file => file.progress !== 100);
+            },
+            playerSearchQuery: '',
+            playerStats: null,
+            playerrecords: [],
+            async searchPlayer() {
+                const queryName = this.playerSearchQuery = this.playerSearchQuery.trim();
+                if (!queryName) return;
+                try {
+                    // 获取玩家统计信息
+                    const statsResponse = await fetch(es_url, {
+                        ...this.getBaseRequestConfig(),
+                        body: JSON.stringify({
+                            size: 0,
+                            query: {
+                                nested: {
+                                    path: "players",
+                                    query: {
+                                        term: {
+                                            "players.name.keyword": queryName
+                                        }
+                                    }
+                                }
+                            },
+                            collapse: { field: "guid" },
+                            aggs: {
+                                total_games: { cardinality: { field: "guid" } },
+                                games_with_result: {
+                                    filter: { term: { haswinner: true } }
+                                },
+                                player_stats: {
+                                    nested: { path: "players" },
+                                    aggs: {
+                                        matching_player: {
+                                            filter: {
+                                                term: { "players.name.keyword": queryName }
+                                            },
+                                            aggs: {
+                                                won_games: {
+                                                    filter: { term: { "players.winner": true } }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                teammates: {
+                                    nested: { path: "players" },
+                                    aggs: {
+                                        filtered_games: {
+                                            filter: {
+                                                bool: {
+                                                    must_not: {
+                                                        term: { "players.name.keyword": queryName }
+                                                    },
+                                                    must: {
+                                                        match: { "players.playertype": 2 }
+                                                    }
+                                                }
+                                            },
+                                            aggs: {
+                                                by_name: {
+                                                    terms: {
+                                                        field: "players.name.keyword",
+                                                        size: 50
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    });
+                    const statsData = await statsResponse.json();
+
+                    const totalGames = statsData.aggregations.total_games.value;
+                    const gamesWithResult = statsData.aggregations.games_with_result.doc_count;
+                    const wonGames = statsData.aggregations.player_stats.matching_player.won_games.doc_count;
+                    const winRate = gamesWithResult ? (wonGames / gamesWithResult * 100).toFixed(2) : 0;
+                    const commonTeammates = statsData.aggregations.teammates.filtered_games.by_name.buckets.map(b => ({
+                        name: b.key,
+                        count: b.doc_count
+                    }));
+
+                    this.playerStats = {
+                        queryName,
+                        totalGames,
+                        gamesWithResult,
+                        wonGames,
+                        winRate,
+                        commonTeammates
+                    };
+
+                    this.fetchPlayerRecords(queryName);
+
+                } catch (error) {
+                    console.error('Failed to fetch player data:', error);
+                }
+            },
+            pcurrentPage: 1,
+            ppageSize: 20,
+            ptotalHits: 0,
+            async fetchPlayerRecords(queryName) {
+                this.searchStatus = 'loading';
+                try {
+                    if (!queryName) queryName = this.playerSearchQuery.trim();
+                    if (!queryName) return;
+                    const recordsResponse = await fetch(es_url, {
+                        ...this.getBaseRequestConfig(),
+                        body: JSON.stringify({
+                            from: (this.pcurrentPage - 1) * this.ppageSize,
+                            size: this.ppageSize,
+                            query: {
+                                nested: {
+                                    path: "players",
+                                    query: {
+                                        term: {
+                                            "players.name.keyword": queryName
+                                        }
+                                    }
+                                }
+                            },
+                            sort: [
+                                { "lastmod": "desc" }
+                            ]
+                        })
+                    });
+                    const recordsData = await recordsResponse.json();
+                    this.ptotalHits = recordsData.hits.total.value;
+                    this.playerrecords = recordsData.hits.hits.map(hit => hit._source);
+                    this.searchStatus = 'idle';
+                } catch (error) {
+                    console.error('Failed to fetch player\'s records:', error);
+                    this.searchStatus = 'error';
+                }
+            },
+            goToPlayerInfo(e) {
+                if (!e.target.className === 'player-link') return;
+                this.playerSearchQuery = e.target.innerText;
+                this.activeTab = 'playerinfo';
+            },
+        }).mount('#app');
+    </script>
+</body>
+
+</html>

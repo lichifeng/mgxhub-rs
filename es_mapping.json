@@ -1,0 +1,281 @@
+{
+  "mappings": {
+    "properties": {
+      "anyorall": {
+        "type": "boolean"
+      },
+      "chat": {
+        "properties": {
+          "content": {
+            "type": "text"
+          },
+          "time": {
+            "type": "long"
+          },
+          "player": {
+            "type": "keyword"
+          }
+        }
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "difficulty": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "difficulty_raw": {
+        "type": "long"
+      },
+      "duration": {
+        "type": "long"
+      },
+      "enablecheats": {
+        "type": "boolean"
+      },
+      "explored2win": {
+        "type": "long"
+      },
+      "filename": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "filesize": {
+        "type": "long"
+      },
+      "gametype": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "gametype_raw": {
+        "type": "long"
+      },
+      "guid": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "haswinner": {
+        "type": "boolean"
+      },
+      "include_ai": {
+        "type": "boolean"
+      },
+      "instantbuild": {
+        "type": "boolean"
+      },
+      "instructions": {
+        "type": "text"
+      },
+      "isconquest": {
+        "type": "boolean"
+      },
+      "ismultiplayer": {
+        "type": "boolean"
+      },
+      "lastmod": {
+        "type": "date"
+      },
+      "lockdiplomacy": {
+        "type": "boolean"
+      },
+      "lockteams": {
+        "type": "boolean"
+      },
+      "mapid": {
+        "type": "long"
+      },
+      "mapname": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "mapsize": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "mapsize_raw": {
+        "type": "long"
+      },
+      "mapx": {
+        "type": "long"
+      },
+      "mapy": {
+        "type": "long"
+      },
+      "matchup": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "md5": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "nofog": {
+        "type": "boolean"
+      },
+      "players": {
+        "type": "nested",
+        "properties": {
+          "castletime": {
+            "type": "long"
+          },
+          "civ": {
+            "type": "keyword",
+            "ignore_above": 256
+          },
+          "civ_raw": {
+            "type": "long"
+          },
+          "colorid": {
+            "type": "long"
+          },
+          "disconnected": {
+            "type": "boolean"
+          },
+          "feudaltime": {
+            "type": "long"
+          },
+          "imperialtime": {
+            "type": "long"
+          },
+          "index": {
+            "type": "long"
+          },
+          "initage": {
+            "type": "keyword",
+            "ignore_above": 256
+          },
+          "initage_raw": {
+            "type": "float"
+          },
+          "initcivilian": {
+            "type": "float"
+          },
+          "initfood": {
+            "type": "float"
+          },
+          "initgold": {
+            "type": "float"
+          },
+          "initmilitary": {
+            "type": "float"
+          },
+          "initpop": {
+            "type": "float"
+          },
+          "initstone": {
+            "type": "float"
+          },
+          "initwood": {
+            "type": "float"
+          },
+          "initx": {
+            "type": "float"
+          },
+          "inity": {
+            "type": "float"
+          },
+          "ismainop": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "text",
+            "fields": {
+              "keyword": {
+                "type": "keyword",
+                "ignore_above": 256
+              }
+            }
+          },
+          "playertype": {
+            "type": "long"
+          },
+          "resigned": {
+            "type": "long"
+          },
+          "slot": {
+            "type": "long"
+          },
+          "teamid": {
+            "type": "long"
+          },
+          "winner": {
+            "type": "boolean"
+          }
+        }
+      },
+      "poplimit": {
+        "type": "long"
+      },
+      "recorder": {
+        "type": "long"
+      },
+      "relics2win": {
+        "type": "long"
+      },
+      "restoretime": {
+        "type": "long"
+      },
+      "revealmap": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "revealmap_raw": {
+        "type": "long"
+      },
+      "score2win": {
+        "type": "long"
+      },
+      "speed": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "speed_raw": {
+        "type": "long"
+      },
+      "time2win": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "time2win_raw": {
+        "type": "long"
+      },
+      "totalplayers": {
+        "type": "long"
+      },
+      "ver": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "verlog": {
+        "type": "long"
+      },
+      "verraw": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "versave": {
+        "type": "float"
+      },
+      "verscenario": {
+        "type": "float"
+      },
+      "victorytype": {
+        "type": "keyword",
+        "ignore_above": 256
+      },
+      "victorytype_raw": {
+        "type": "long"
+      }
+    }
+  }
+}
