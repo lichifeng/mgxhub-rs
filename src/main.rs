@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, Multipart, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Multipart, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -8,54 +8,68 @@ use axum::{
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use clap::Parser;
-use elasticsearch::{http::transport::Transport, Elasticsearch, IndexParts};
+use elasticsearch::{
+    auth::Credentials,
+    http::transport::{SingleNodeConnectionPool, Transport, TransportBuilder},
+    Elasticsearch, IndexParts,
+};
 use flate2::{write::GzEncoder, Compression};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use std::fs::File;
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use url::Url;
 use zip::{write::FileOptions, ZipWriter};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Config {
     /// Maximum file size in megabytes
-    #[arg(long, default_value_t = 50)]
+    #[arg(long, default_value_t = 50, env = "MAX_SIZE")]
     max_size: usize,
 
     /// Port to listen on
-    #[arg(long, default_value_t = 3000)]
+    #[arg(long, default_value_t = 3000, env = "PORT")]
     port: u16,
 
     /// Host address to bind to
-    #[arg(long, default_value = "0.0.0.0")]
+    #[arg(long, default_value = "0.0.0.0", env = "HOST")]
     host: String,
 
     /// Records storage directory
-    #[arg(long, default_value = "records")]
+    #[arg(long, default_value = "records", env = "RECORD_DIR")]
     record_dir: PathBuf,
 
     /// Maps storage directory
-    #[arg(long, default_value = "maps")]
+    #[arg(long, default_value = "maps", env = "MAP_DIR")]
     map_dir: PathBuf,
 
     /// SQLite database path
-    #[arg(long, default_value = "mgxhub.sqlite")]
+    #[arg(long, default_value = "mgxhub.sqlite", env = "DB_PATH")]
     db_path: PathBuf,
 
     /// Elasticsearch URL
-    #[arg(long, default_value = "http://192.168.200.11:9202")]
+    #[arg(long, default_value = "http://192.168.200.11:9202", env = "ES_URL")]
     es_url: String,
 
     /// Elasticsearch index name
-    #[arg(long, default_value = "records_demo")]
+    #[arg(long, default_value = "records_demo", env = "ES_INDEX")]
     es_index: String,
 
+    /// Elasticsearch username
+    #[arg(long, env = "ES_USER")]
+    es_user: Option<String>,
+
+    /// Elasticsearch password
+    #[arg(long, env = "ES_PASS")]
+    es_pass: Option<String>,
+
     /// Enable GZIP compression for JSON responses
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, env = "NO_GZIP")]
     no_gzip: bool,
 }
 
@@ -104,6 +118,7 @@ async fn main() {
         "CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            uploader TEXT,
             md5 TEXT UNIQUE NOT NULL,
             guid TEXT,
             duration INTEGER,
@@ -116,8 +131,12 @@ async fn main() {
     .await
     .unwrap();
 
-    // Initialize Elasticsearch client
-    let transport = Transport::single_node(&config.es_url).unwrap();
+    // Initialize Elasticsearch client with optional credentials
+    let transport = if let (Some(user), Some(pass)) = (config.es_user, config.es_pass) {
+        transport_with_cred(&config.es_url, Credentials::Basic(user, pass)).unwrap()
+    } else {
+        Transport::single_node(&config.es_url).unwrap()
+    };
     let es_client = Elasticsearch::new(transport);
 
     // Check if index exists
@@ -130,7 +149,7 @@ async fn main() {
         Ok(index_exists) => {
             if !index_exists.status_code().is_success() {
                 // Read mapping from file
-                let mapping = include_str!("../es_mapping.json");
+                let mapping = include_str!("../es_mapping_ik.json");
                 let mapping: serde_json::Value =
                     serde_json::from_str(&mapping).expect("Failed to parse es_mapping.json");
 
@@ -141,8 +160,13 @@ async fn main() {
                     .send()
                     .await
                 {
-                    Ok(_) => {
-                        println!("[Info] Created ES index: {} with mapping", config.es_index);
+                    Ok(rep) => {
+                        if rep.status_code().is_success() {
+                            println!("[Info] Created ES index: {} with mapping", config.es_index);
+                        } else {
+                            eprintln!("[ Err] Failed to create ES index: {:?}", rep);
+                            std::process::exit(1);
+                        }
                     }
                     Err(e) => {
                         eprintln!("[ Err] Failed to create ES index: {}", e);
@@ -200,7 +224,7 @@ async fn main() {
     println!("* Press Ctrl+C to stop the server");
 
     // 使用 axum::serve 的 with_graceful_shutdown
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async {
             rx.await.ok();
         })
@@ -210,7 +234,12 @@ async fn main() {
     println!("Mgxhub server has stopped.");
 }
 
-async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) -> impl IntoResponse {
+#[axum::debug_handler]
+async fn handle_upload(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
     let mut recfile: Option<Bytes> = None;
     let mut recname: Option<String> = None;
     let mut lastmod: Option<u64> = None;
@@ -241,8 +270,8 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
             Some("lastmod") => match field.text().await.unwrap().parse::<u64>() {
                 Ok(time) => {
                     // Validate time range (1999-01-01 to now)
-                    let current_time = chrono::Utc::now().timestamp() as u64;
-                    let min_time = 915148800; // 1999-01-01 00:00:00 UTC, age of empires 2 release date
+                    let current_time = chrono::Utc::now().timestamp_millis() as u64;
+                    let min_time = 915148800000; // 1999-01-01 00:00:00 UTC, age of empires 2 release date
                     if time < min_time || time > current_time {
                         lastmod = Some(current_time);
                     } else {
@@ -260,8 +289,9 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
     match (recfile, recname, lastmod) {
         (Some(data), Some(filename), Some(modified_time)) => {
             println!(
-                "[Info][{}] Uploaded: {}, size: {}, lastmod: {}",
+                "[Info][{}] {} uploaded: {}, size: {}, lastmod: {}",
                 get_current_time(),
+                addr.ip(),
                 &filename,
                 data.len(),
                 modified_time
@@ -357,6 +387,14 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
 
                     zip_path = state.record_dir.join(format!("{}.zip", md5));
                     if zip_path.exists() {
+                        println!(
+                            "[Info][{}] {} uploaded existing file {} with name: {} lastmod: {}",
+                            get_current_time(),
+                            addr.ip(),
+                            &md5,
+                            &filename_clone,
+                            modified_time
+                        );
                         return;
                     }
                 } else {
@@ -452,14 +490,17 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
             let sql_json = json_value_arc.clone();
             tokio::spawn(async move {
                 // 3. Save to SQLite
-                match sqlx::query("INSERT INTO records (md5, guid, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?)")
-                    .bind(&sql_json["md5"])
-                    .bind(&sql_json["guid"])
-                    .bind(&sql_json["haswinner"])
-                    .bind(&sql_json["hasai"])
-                    .bind(&json)
-                    .execute(&state.db_pool)
-                    .await
+                match sqlx::query(
+                    "INSERT INTO records (uploader, md5, guid, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(addr.ip().to_string())
+                .bind(&sql_json["md5"])
+                .bind(&sql_json["guid"])
+                .bind(&sql_json["haswinner"])
+                .bind(&sql_json["hasai"])
+                .bind(&json)
+                .execute(&state.db_pool)
+                .await
                 {
                     Ok(_) => {}
                     Err(e) => {
@@ -477,4 +518,13 @@ async fn handle_upload(State(state): State<AppState>, mut multipart: Multipart) 
 fn get_current_time() -> String {
     let now: DateTime<Utc> = Utc::now();
     now.format("%Y-%m-%dT%H:%M:%S").to_string()
+}
+
+pub fn transport_with_cred(url: &str, cred: Credentials) -> Option<Transport> {
+    let u = Url::parse(url).unwrap();
+
+    let conn_pool = SingleNodeConnectionPool::new(u);
+    let transport_builder = TransportBuilder::new(conn_pool);
+
+    transport_builder.auth(cred).build().ok()
 }
