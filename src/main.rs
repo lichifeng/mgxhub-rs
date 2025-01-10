@@ -29,47 +29,47 @@ use zip::{write::FileOptions, ZipWriter};
 #[command(author, version, about, long_about = None)]
 struct Config {
     /// Maximum file size in megabytes
-    #[arg(long, default_value_t = 50, env = "MAX_SIZE")]
+    #[arg(long, default_value_t = 50, env)]
     max_size: usize,
 
     /// Port to listen on
-    #[arg(long, default_value_t = 3000, env = "PORT")]
+    #[arg(long, default_value_t = 3000, env)]
     port: u16,
 
     /// Host address to bind to
-    #[arg(long, default_value = "0.0.0.0", env = "HOST")]
+    #[arg(long, default_value = "0.0.0.0", env)]
     host: String,
 
     /// Records storage directory
-    #[arg(long, default_value = "records", env = "RECORD_DIR")]
+    #[arg(long, default_value = "records", env)]
     record_dir: PathBuf,
 
     /// Maps storage directory
-    #[arg(long, default_value = "maps", env = "MAP_DIR")]
+    #[arg(long, default_value = "maps", env)]
     map_dir: PathBuf,
 
     /// SQLite database path
-    #[arg(long, default_value = "mgxhub.sqlite", env = "DB_PATH")]
+    #[arg(long, default_value = "mgxhub.sqlite", env)]
     db_path: PathBuf,
 
     /// Elasticsearch URL
-    #[arg(long, default_value = "http://192.168.200.11:9202", env = "ES_URL")]
+    #[arg(long, default_value = "http://127.0.0.1:9200", env)]
     es_url: String,
 
     /// Elasticsearch index name
-    #[arg(long, default_value = "records_demo", env = "ES_INDEX")]
+    #[arg(long, default_value = "records_demo", env)]
     es_index: String,
 
     /// Elasticsearch username
-    #[arg(long, env = "ES_USER")]
+    #[arg(long, env)]
     es_user: Option<String>,
 
     /// Elasticsearch password
-    #[arg(long, env = "ES_PASS")]
+    #[arg(long, env)]
     es_pass: Option<String>,
 
     /// Enable GZIP compression for JSON responses
-    #[arg(long, default_value_t = false, env = "NO_GZIP")]
+    #[arg(long, default_value_t = false, env)]
     no_gzip: bool,
 }
 
@@ -200,7 +200,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .route("/upload", post(handle_upload).layer(DefaultBodyLimit::max(state.max_size * 1024 * 1024)))
+        .route("/", post(handle_upload).layer(DefaultBodyLimit::max(state.max_size * 1024 * 1024)))
         .with_state(state.clone())
         .layer(cors);
 
@@ -242,7 +242,7 @@ async fn handle_upload(
 ) -> impl IntoResponse {
     let mut recfile: Option<Bytes> = None;
     let mut recname: Option<String> = None;
-    let mut lastmod: Option<u64> = None;
+    let mut lastmod: Option<u128> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         match field.name() {
@@ -267,10 +267,10 @@ async fn handle_upload(
                 recname = Some(filename);
                 recfile = Some(data);
             }
-            Some("lastmod") => match field.text().await.unwrap().parse::<u64>() {
+            Some("lastmod") => match field.text().await.unwrap().parse::<u128>() {
                 Ok(time) => {
                     // Validate time range (1999-01-01 to now)
-                    let current_time = chrono::Utc::now().timestamp_millis() as u64;
+                    let current_time = chrono::Utc::now().timestamp_millis() as u128;
                     let min_time = 915148800000; // 1999-01-01 00:00:00 UTC, age of empires 2 release date
                     if time < min_time || time > current_time {
                         lastmod = Some(current_time);
