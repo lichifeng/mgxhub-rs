@@ -251,7 +251,10 @@ async fn handle_upload(
                 // Check file extension
                 let extension = filename.split('.').last().unwrap_or("").to_lowercase();
                 if !["mgx", "mgx2", "mgz", "mgl"].contains(&extension.as_str()) {
-                    return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Not an Age of Empires II record file")
+                    return (
+                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        format!("Not an Age of Empires II record file: {} / {}", filename, extension),
+                    )
                         .into_response();
                 }
 
@@ -503,8 +506,15 @@ async fn handle_upload(
                 .await
                 {
                     Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("[Warn][{}] SQLite: {}", get_current_time(), e);
+                    Err(e) => match e.as_database_error() {
+                        Some(db_err) => {
+                            if db_err.code().unwrap_or_else(|| std::borrow::Cow::Borrowed("")) == "2067" {} else {
+                                eprintln!("[ Err][{}] SQLite: {}", get_current_time(), e);
+                            }
+                        }
+                        _ => {
+                            eprintln!("[ Err][{}] SQLite: {}", get_current_time(), e);
+                        }
                     }
                 }
             });
