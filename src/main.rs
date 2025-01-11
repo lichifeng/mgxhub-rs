@@ -238,6 +238,7 @@ async fn main() {
 async fn handle_upload(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let mut recfile: Option<Bytes> = None;
@@ -289,12 +290,13 @@ async fn handle_upload(
         }
     }
 
+    let ip = get_client_ip(&headers, addr);
     match (recfile, recname, lastmod) {
         (Some(data), Some(filename), Some(modified_time)) => {
             println!(
                 "[Info][{}] {} uploaded: {}, size: {}, lastmod: {}",
                 get_current_time(),
-                addr.ip(),
+                ip,
                 &filename,
                 data.len(),
                 modified_time
@@ -356,6 +358,7 @@ async fn handle_upload(
 
             // Spawn async tasks
             let storage_json = json_value_arc.clone();
+            let ip_clone1 = ip.clone();
             tokio::spawn(async move {
                 // 1. Create ZIP archive and map file
                 match record.guid {
@@ -393,7 +396,7 @@ async fn handle_upload(
                         println!(
                             "[Info][{}] {} uploaded existing file {} with name: {} lastmod: {}",
                             get_current_time(),
-                            addr.ip(),
+                            ip_clone1,
                             &md5,
                             &filename_clone,
                             modified_time
@@ -496,7 +499,7 @@ async fn handle_upload(
                 match sqlx::query(
                     "INSERT INTO records (uploader, md5, guid, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?, ?)",
                 )
-                .bind(addr.ip().to_string())
+                .bind(ip)
                 .bind(&sql_json["md5"])
                 .bind(&sql_json["guid"])
                 .bind(&sql_json["haswinner"])
@@ -537,4 +540,15 @@ pub fn transport_with_cred(url: &str, cred: Credentials) -> Option<Transport> {
     let transport_builder = TransportBuilder::new(conn_pool);
 
     transport_builder.auth(cred).build().ok()
+}
+
+fn get_client_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
+    // Try to get X-Forwarded-For header
+    headers
+        .get("X-Forwarded-For")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.split(',').next())
+        .map(|ip| ip.trim().to_string())
+        // Fallback to direct connection IP
+        .unwrap_or_else(|| addr.ip().to_string())
 }
