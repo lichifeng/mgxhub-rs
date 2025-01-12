@@ -412,7 +412,7 @@ async fn handle_upload(
 
                 // Convert Unix timestamp to DOS date/time
                 let dt =
-                    chrono::DateTime::from_timestamp(modified_time as i64, 0).unwrap_or_else(|| chrono::Utc::now());
+                    chrono::DateTime::from_timestamp_millis(modified_time as i64).unwrap_or_else(|| chrono::Utc::now());
                 let dos_time = zip::DateTime::from_date_and_time(
                     dt.year() as u16,
                     dt.month() as u8,
