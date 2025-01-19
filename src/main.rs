@@ -12,6 +12,7 @@ use elasticsearch::{
     auth::Credentials,
     http::transport::{SingleNodeConnectionPool, Transport, TransportBuilder},
     Elasticsearch, IndexParts,
+    params::OpType
 };
 use flate2::{write::GzEncoder, Compression};
 use serde_json::Value;
@@ -466,11 +467,12 @@ async fn handle_upload(
                     .es_client
                     .index(IndexParts::IndexId(&state.es_index, es_json["md5"].as_str().unwrap()))
                     .body(&es_json)
+                    .op_type(OpType::Create)
                     .send()
                     .await
                 {
                     Ok(retval) => {
-                        if retval.status_code().is_success() {
+                        if retval.status_code().is_success() || retval.status_code() == StatusCode::CONFLICT {
                             #[cfg(debug_assertions)]
                             println!(
                                 "[Info][{}] ESDocMD5: {} status: {:?}",

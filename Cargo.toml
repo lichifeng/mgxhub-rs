@@ -1,6 +1,6 @@
 [package]
 name = "mgxhub"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["daoyu<lichifeng@qq.com>"]
 description = "aocrec.com api server source code"
