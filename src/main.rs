@@ -42,15 +42,15 @@ struct Config {
     host: String,
 
     /// Records storage directory
-    #[arg(long, default_value = "records", env)]
+    #[arg(long, default_value = "data/records", env)]
     record_dir: PathBuf,
 
     /// Maps storage directory
-    #[arg(long, default_value = "maps", env)]
+    #[arg(long, default_value = "data/maps", env)]
     map_dir: PathBuf,
 
     /// SQLite database path
-    #[arg(long, default_value = "mgxhub.sqlite", env)]
+    #[arg(long, default_value = "data/mgxhub.sqlite", env)]
     db_path: PathBuf,
 
     /// Elasticsearch URL
