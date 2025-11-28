@@ -7,3 +7,9 @@ see `--help`
 
 ## notice
 - hd/de versions are not accepted
+
+## dev notes
+before compiling:
+```
+apt install libssl-dev pkg-config
+```
