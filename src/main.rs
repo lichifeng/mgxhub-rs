@@ -1,6 +1,6 @@
 use axum::{
     body::Bytes,
-    extract::{ConnectInfo, DefaultBodyLimit, Multipart, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -72,6 +72,10 @@ struct Config {
     /// Enable GZIP compression for JSON responses
     #[arg(long, default_value_t = false, env)]
     no_gzip: bool,
+
+    /// Password for delete operations
+    #[arg(long, env)]
+    delete_pass: Option<String>,
 }
 
 #[derive(Clone)]
@@ -85,6 +89,7 @@ struct AppState {
     es_client: Elasticsearch,
     es_index: String,
     gzip: bool,
+    delete_pass: Option<String>,
 }
 
 #[tokio::main]
@@ -122,9 +127,11 @@ async fn main() {
             uploader TEXT,
             md5 TEXT UNIQUE NOT NULL,
             guid TEXT,
+            parser TEXT,
             duration INTEGER,
             haswinner BOOLEAN,
             hasai BOOLEAN,
+            deleted INTEGER DEFAULT 0,
             data TEXT NOT NULL
         )",
     )
@@ -154,10 +161,20 @@ async fn main() {
                 let mapping: serde_json::Value =
                     serde_json::from_str(&mapping).expect("Failed to parse es_mapping.json");
 
+                // Disable version control in the settings
+                let index_body = serde_json::json!({
+                    "mappings": mapping["mappings"].clone(),
+                    "settings": {
+                        "index": {
+                            "refresh_interval": "5s"
+                        }
+                    }
+                });
+
                 match es_client
                     .indices()
                     .create(elasticsearch::indices::IndicesCreateParts::Index(&config.es_index))
-                    .body(mapping) // Use the mapping from file
+                    .body(index_body) // Use the mapping from file
                     .send()
                     .await
                 {
@@ -192,16 +209,18 @@ async fn main() {
         es_client,
         es_index: config.es_index,
         gzip: !config.no_gzip,
+        delete_pass: config.delete_pass,
     };
 
     let cors = CorsLayer::new()
         .allow_origin(Any) // Allow any origin
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST]) // Allow GET and POST methods
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::DELETE]) // Allow GET, POST and DELETE methods
         .allow_headers(Any); // Allow any headers
 
     let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
-        .route("/", post(handle_upload).layer(DefaultBodyLimit::max(state.max_size * 1024 * 1024)))
+        .route("/", get(|| async { "How do you turn this on" }))
+        .route("/upload", post(handle_upload).layer(DefaultBodyLimit::max(state.max_size * 1024 * 1024)))
+        .route("/delete", axum::routing::delete(handle_delete))
         .with_state(state.clone())
         .layer(cors);
 
@@ -499,11 +518,13 @@ async fn handle_upload(
             tokio::spawn(async move {
                 // 3. Save to SQLite
                 match sqlx::query(
-                    "INSERT INTO records (uploader, md5, guid, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO records (uploader, md5, guid, parser, duration, haswinner, hasai, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(ip)
-                .bind(&sql_json["md5"])
-                .bind(&sql_json["guid"])
+                .bind(sql_json["md5"].as_str())
+                .bind(sql_json["guid"].as_str())
+                .bind(sql_json["parser"].as_str())
+                .bind(&sql_json["duration"])
                 .bind(&sql_json["haswinner"])
                 .bind(&sql_json["hasai"])
                 .bind(&json)
@@ -542,6 +563,103 @@ pub fn transport_with_cred(url: &str, cred: Credentials) -> Option<Transport> {
     let transport_builder = TransportBuilder::new(conn_pool);
 
     transport_builder.auth(cred).build().ok()
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteParams {
+    guid: String,
+    pass: String,
+}
+
+#[axum::debug_handler]
+async fn handle_delete(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(params): Query<DeleteParams>,
+) -> impl IntoResponse {
+    let ip = get_client_ip(&headers, addr);
+    
+    // Check if delete password is configured
+    let configured_pass = match &state.delete_pass {
+        Some(pass) => pass,
+        None => {
+            eprintln!("[ Err][{}] {} attempted delete but delete_pass not configured", get_current_time(), ip);
+            return (StatusCode::FORBIDDEN, "Delete operation not enabled").into_response();
+        }
+    };
+
+    // Verify password
+    if params.pass != *configured_pass {
+        eprintln!("[ Err][{}] {} attempted delete with wrong password", get_current_time(), ip);
+        return (StatusCode::UNAUTHORIZED, "Invalid password").into_response();
+    }
+
+    let guid = params.guid.trim();
+    if guid.is_empty() {
+        return (StatusCode::BAD_REQUEST, "GUID cannot be empty").into_response();
+    }
+
+    println!("[Info][{}] {} requesting delete for GUID: {}", get_current_time(), ip, guid);
+
+    // Update SQLite: set deleted = 1
+    let sqlite_result = sqlx::query("UPDATE records SET deleted = 1 WHERE guid = ?")
+        .bind(guid)
+        .execute(&state.db_pool)
+        .await;
+
+    match sqlite_result {
+        Ok(result) => {
+            let rows_affected = result.rows_affected();
+            if rows_affected == 0 {
+                println!("[Warn][{}] No records found with GUID: {}", get_current_time(), guid);
+            } else {
+                println!("[Info][{}] Marked {} record(s) as deleted in SQLite for GUID: {}", get_current_time(), rows_affected, guid);
+            }
+        }
+        Err(e) => {
+            eprintln!("[ Err][{}] Failed to update SQLite: {}", get_current_time(), e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to update database").into_response();
+        }
+    }
+
+    // Delete from Elasticsearch: find all documents with matching guid
+    let search_body = serde_json::json!({
+        "query": {
+            "term": {
+                "guid": guid
+            }
+        }
+    });
+
+    let es_delete_result = state.es_client
+        .delete_by_query(elasticsearch::DeleteByQueryParts::Index(&[&state.es_index]))
+        .body(search_body)
+        .send()
+        .await;
+
+    match es_delete_result {
+        Ok(response) => {
+            if response.status_code().is_success() {
+                println!("[Info][{}] Deleted documents from Elasticsearch for GUID: {}", get_current_time(), guid);
+                (StatusCode::OK, format!("Successfully deleted records with GUID: {}", guid)).into_response()
+            } else {
+                let status = response.status_code();
+                eprintln!("[ Err][{}] Elasticsearch delete failed with status: {:?}", get_current_time(), status);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to delete from Elasticsearch, status: {}", status)
+                ).into_response()
+            }
+        }
+        Err(e) => {
+            eprintln!("[ Err][{}] Failed to delete from Elasticsearch: {}", get_current_time(), e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to delete from Elasticsearch: {}", e)
+            ).into_response()
+        }
+    }
 }
 
 fn get_client_ip(headers: &HeaderMap, addr: SocketAddr) -> String {

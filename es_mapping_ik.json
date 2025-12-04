@@ -131,6 +131,14 @@
       "nofog": {
         "type": "boolean"
       },
+      "parser": {
+        "type": "text",
+        "index": false
+      },
+      "teams": {
+        "type": "integer",
+        "index": false
+      },
       "players": {
         "type": "nested",
         "properties": {
