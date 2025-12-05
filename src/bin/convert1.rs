@@ -260,7 +260,7 @@ async fn update_sqlite(config: &Config, db_pool: &SqlitePool, new_db_pool: &Sqli
                     let new_parser = new_json.get("parser").and_then(|v| v.as_str());
                     let new_duration = new_json.get("duration").and_then(|v| v.as_i64());
                     let new_haswinner = new_json.get("haswinner").and_then(|v| v.as_bool());
-                    let new_hasai = new_json.get("hasai").and_then(|v| v.as_bool());
+                    let new_hasai = new_json.get("include_ai").and_then(|v| v.as_bool());
 
                     // Insert into new database
                     sqlx::query(
@@ -432,7 +432,7 @@ async fn process_record(config: &Config, old_record: &RecordRow) -> (UpdateResul
     let new_guid = new_json.get("guid").and_then(|v| v.as_str()).map(|s| s.to_string());
     let new_duration = new_json.get("duration").and_then(|v| v.as_i64());
     let new_haswinner = new_json.get("haswinner").and_then(|v| v.as_bool());
-    let new_hasai = new_json.get("hasai").and_then(|v| v.as_bool());
+    let new_hasai = new_json.get("include_ai").and_then(|v| v.as_bool());
 
     // Parse old string values to bool (handles "true"/"false", "0"/"1", or integer strings)
     let old_haswinner_bool = old_record.haswinner.as_ref().and_then(|s| parse_bool_from_string(s));

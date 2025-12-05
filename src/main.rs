@@ -526,7 +526,7 @@ async fn handle_upload(
                 .bind(sql_json["parser"].as_str())
                 .bind(&sql_json["duration"])
                 .bind(&sql_json["haswinner"])
-                .bind(&sql_json["hasai"])
+                .bind(&sql_json["include_ai"])
                 .bind(&json)
                 .execute(&state.db_pool)
                 .await
@@ -663,12 +663,29 @@ async fn handle_delete(
 }
 
 fn get_client_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
-    // Try to get X-Forwarded-For header
-    headers
-        .get("X-Forwarded-For")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.split(',').next())
-        .map(|ip| ip.trim().to_string())
-        // Fallback to direct connection IP
-        .unwrap_or_else(|| addr.ip().to_string())
+    // Priority 1: Try Cloudflare's CF-Connecting-IP header (most reliable for Cloudflare)
+    if let Some(cf_ip) = headers.get("CF-Connecting-IP") {
+        if let Ok(ip_str) = cf_ip.to_str() {
+            return ip_str.trim().to_string();
+        }
+    }
+
+    // Priority 2: Try X-Real-IP header (common in reverse proxy setups)
+    if let Some(real_ip) = headers.get("X-Real-IP") {
+        if let Ok(ip_str) = real_ip.to_str() {
+            return ip_str.trim().to_string();
+        }
+    }
+
+    // Priority 3: Try X-Forwarded-For header (get first IP in chain)
+    if let Some(forwarded) = headers.get("X-Forwarded-For") {
+        if let Ok(forwarded_str) = forwarded.to_str() {
+            if let Some(first_ip) = forwarded_str.split(',').next() {
+                return first_ip.trim().to_string();
+            }
+        }
+    }
+
+    // Fallback: Use direct connection IP
+    addr.ip().to_string()
 }
