@@ -1,4 +1,4 @@
-FROM rust:slim-bookworm AS builder
+FROM rust:slim-trixie AS builder
 
 WORKDIR /compile
 
@@ -8,7 +8,7 @@ RUN apt-get update && \
     apt-get install -y pkg-config libssl-dev && \
     cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 WORKDIR /mgxhub
 

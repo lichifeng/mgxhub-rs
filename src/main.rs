@@ -525,8 +525,8 @@ async fn handle_upload(
                 .bind(sql_json["guid"].as_str())
                 .bind(sql_json["parser"].as_str())
                 .bind(&sql_json["duration"])
-                .bind(&sql_json["haswinner"])
-                .bind(&sql_json["include_ai"])
+                .bind(sql_json["haswinner"].as_bool())
+                .bind(sql_json["include_ai"].as_bool())
                 .bind(&json)
                 .execute(&state.db_pool)
                 .await
